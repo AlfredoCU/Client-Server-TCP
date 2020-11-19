@@ -1,69 +1,132 @@
 package main
 
+// Import libraries.
 import (
-	"bufio"
+	"encoding/gob"
 	"fmt"
-	"io"
 	"log"
 	"net"
-	"strings"
+	"time"
 )
 
+// Const type and port server.
 const (
 	Type = "tcp"
-	Port = ":9999"
+	Port = "localhost:9999"
 )
 
-func main() {
+// Function connection and start the server.
+func server(channels []chan uint64, exit []chan bool) {
+	// added data, send data and receive data.
+	add := make(chan uint64, 2)
+	send := make(chan net.Conn)
+	receive := make(chan bool)
+
+	// Listening server.
 	listener, err := net.Listen(Type, Port)
 
 	if err != nil {
 		log.Fatalln("ERROR_LISTENING: ", err)
 	}
 
+	// Closer connection.
 	defer listener.Close()
 
+	// If you want, you can increment a counter here and inject to ProcessManager below as client identifier
+	go processManager(channels, exit, add, send, receive)
+
+	// Accept connection for client.
 	for {
 		con, err := listener.Accept()
 		if err != nil {
-			fmt.Println("ERROR_CONNECTING: ", err)
+			log.Println("ERROR_CONNECTING: ", err)
 			continue
 		}
-
-		// If you want, you can increment a counter here and inject to handleClientRequest below as client identifier
-		go handleClientRequest(con)
+		send <- con
 	}
 }
 
-func handleClientRequest(con net.Conn) {
+// Function handleClientRequest -> arguments of connection, channels of add, recive and exit.
+func handleClientRequest(con net.Conn, channel chan uint64, exit chan bool, add chan uint64, receive chan bool) {
+	// Terminate connection.
 	defer con.Close()
 
-	clientReader := bufio.NewReader(con)
+	// Terminate request of client.
+	exit <- true
+
+	// Data
+	data := [2]uint64{<-channel, <- channel}
+	err := gob.NewEncoder(con).Encode(data)
+
+	if err != nil {
+		log.Println("ERROR: ", err)
+	}
 
 	for {
 		// Waiting for the client request
-		clientRequest, err := clientReader.ReadString('\n')
+		err := gob.NewDecoder(con).Decode(&data[1])
 
-		switch err {
-			case nil:
-				clientRequest := strings.TrimSpace(clientRequest)
-				if clientRequest == ":QUIT" {
-					fmt.Println("Client requested server to close the connection so closing")
-					return
-				} else {
-					fmt.Println(clientRequest)
-				}
-			case io.EOF:
-				fmt.Println("Client closed the connection by terminating the process")
-				return
-			default:
-				fmt.Printf("ERROR: %v\n", err)
-				return
-		}
-
-		// Responding to the client request
-		if _, err = con.Write([]byte("GOT IT!\n")); err != nil {
-			fmt.Printf("Dailed to respond to client: %v\n", err)
+		if err != nil {
+			add <- data[0]
+			add <- data[1]
+			receive <- true
+			return
 		}
 	}
+}
+
+// Function process -> increment for process and select action for run.
+func process(id uint64, i uint64, channel chan uint64, exit chan bool) {
+	for {
+		select {
+		case <-exit:
+			channel <- id
+			channel <- i
+			return
+		default:
+			fmt.Println(id, " : ", i)
+			i = i + 1
+			time.Sleep(time.Millisecond * 500)
+		}
+	}
+}
+
+// Function processManager -> receive or send process.
+func processManager(channels []chan uint64, exit []chan bool, add chan uint64, send chan net.Conn, receive chan bool) {
+	for {
+		select {
+		case <- receive:
+			inf := [2]uint64{<-add, <- add}
+			channels = append(channels, make(chan uint64, 2))
+			exit = append(exit, make(chan bool))
+			go process(inf[0], inf[1], channels[len(channels)-1], exit[len(exit)-1])
+		case c := <- send:
+			go handleClientRequest(c, channels[0], exit[0], add, receive)
+			channels = channels[1:]
+			exit = exit[1:]
+		}
+	}
+}
+
+// Function main.
+func main() {
+	// variables
+	var idCount uint64 = 0
+	channels := make([]chan uint64, 5)
+	exit := make([]chan bool, 5)
+
+	// Quantity of process.
+	for i:= 0; i < 5; i++{
+		channels[i] = make(chan uint64, 2)
+		exit[i] = make(chan bool)
+		go process(idCount, 0, channels[i], exit[i])
+		idCount++
+	}
+
+	// Start server.
+	go server(channels, exit)
+
+	// Stop server.
+	var exitServer string
+	_,_ = fmt.Scanln(&exitServer)
 }

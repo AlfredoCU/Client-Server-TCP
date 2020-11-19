@@ -1,61 +1,71 @@
 package main
 
+// Import libraries.
 import (
-	"bufio"
+	"encoding/gob"
 	"fmt"
-	"io"
+	"log"
 	"net"
-	"os"
-	"strings"
+	"time"
 )
 
+// Const type and port server.
 const (
 	ConnType = "tcp"
-	ConnPort = ":9999"
+	ConnPort = "localhost:9999"
 )
 
-func main() {
+// function connection in the server.
+func client() {
+	// Connection in the server.
 	con, err := net.Dial(ConnType, ConnPort)
 
 	if err != nil {
-		fmt.Println("ERROR_CONNECTING: ", err)
+		log.Println("ERROR_CONNECTING: ", err)
 	}
 
+	// Terminated connection the client.
 	defer con.Close()
 
-	clientReader := bufio.NewReader(os.Stdin)
-	serverReader := bufio.NewReader(con)
+	// Data.
+	var dataClient [2]uint64
+	err = gob.NewDecoder(con).Decode(&dataClient)
 
-	for {
-		// Waiting for the client request
-		clientRequest, err := clientReader.ReadString('\n')
+	if err != nil {
+		log.Println(err)
+	} else {
+		// Run process.
+		channel := make(chan uint64)
+		go processClient(dataClient[0], dataClient[1], channel)
 
-		switch err {
-			case nil:
-				clientRequest := strings.TrimSpace(clientRequest)
-				if _, err = con.Write([]byte(clientRequest + "\n")); err != nil {
-					fmt.Printf("Failed to send the client request: %v\n", err)
-				}
-			case io.EOF:
-				fmt.Println("Client closed the connection")
-				return
-			default:
-				fmt.Printf("ERROR_CLIENT: %v\n", err)
-				return
-		}
+		for {
+			dataClient[1] = <- channel
+			err := gob.NewEncoder(con).Encode(dataClient[1])
 
-		// Waiting for the server response
-		serverResponse, err := serverReader.ReadString('\n')
-
-		switch err {
-			case nil:
-				fmt.Println(strings.TrimSpace(serverResponse))
-			case io.EOF:
-				fmt.Println("Server closed the connection")
+			if err != nil {
+				log.Println("ERROR: ", err)
 				return
-			default:
-				fmt.Printf("ERROR_SERVER: %v\n", err)
-				return
+			}
 		}
 	}
+}
+
+// Function processClient -> run process in the client.
+func processClient(id uint64, i uint64, channel chan uint64) {
+	for {
+		fmt.Println(id, " : ", i)
+		i = i + 1
+		channel <- i
+		time.Sleep(time.Millisecond * 500)
+	}
+}
+
+// function main.
+func main() {
+	// Start client.
+	go client()
+
+	// Stop client.
+	var exitClient string
+	_,_ = fmt.Scanln(&exitClient)
 }
